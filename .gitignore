@@ -1,0 +1,11 @@
+.classpath
+.project
+.settings/
+bin/
+
+# Local configuration and data
+settings.properties
+*.db
+*.db-wal
+*.db-shm
+backups/
