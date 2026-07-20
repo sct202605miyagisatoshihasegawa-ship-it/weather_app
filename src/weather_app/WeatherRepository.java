@@ -17,7 +17,16 @@ public final class WeatherRepository implements AutoCloseable {
     private final Connection connection;
 
     public WeatherRepository(Path databaseFile) throws SQLException {
-        this(DriverManager.getConnection("jdbc:sqlite:" + databaseFile.toAbsolutePath()));
+        this(openConnection(databaseFile));
+    }
+
+    private static Connection openConnection(Path databaseFile) throws SQLException {
+        try {
+            Class.forName("org.sqlite.JDBC");
+        } catch (ClassNotFoundException e) {
+            throw new SQLException("SQLite JDBC driver is unavailable", e);
+        }
+        return DriverManager.getConnection("jdbc:sqlite:" + databaseFile.toAbsolutePath());
     }
 
     WeatherRepository(Connection connection) throws SQLException {
@@ -69,6 +78,58 @@ public final class WeatherRepository implements AutoCloseable {
             }
         }
         return records;
+    }
+
+    public List<WeatherRecord> findAll() throws SQLException {
+        String sql = "SELECT observed_at, city, temperature, humidity, pressure FROM weather_observations "
+                + "ORDER BY observed_at, city";
+        List<WeatherRecord> records = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(sql);
+                ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                records.add(new WeatherRecord(LocalDateTime.parse(result.getString("observed_at")), result.getString("city"),
+                        result.getDouble("temperature"), result.getDouble("humidity"), result.getDouble("pressure")));
+            }
+        }
+        return records;
+    }
+
+    /** Inserts a validated CSV batch without replacing observations that already exist. */
+    public CsvImportResult importIfAbsent(List<WeatherRecord> records) throws SQLException {
+        String sql = "INSERT OR IGNORE INTO weather_observations "
+                + "(observed_at, city, temperature, humidity, pressure) VALUES (?, ?, ?, ?, ?)";
+        boolean previousAutoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        int imported = 0;
+        List<WeatherRecord> importedRecords = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (WeatherRecord record : records) {
+                statement.setString(1, record.dateTime().toString());
+                statement.setString(2, record.city());
+                statement.setDouble(3, record.temperature());
+                statement.setDouble(4, record.humidity());
+                statement.setDouble(5, record.pressure());
+                if (statement.executeUpdate() == 1) {
+                    imported++;
+                    importedRecords.add(record);
+                }
+            }
+            connection.commit();
+            return new CsvImportResult(imported, records.size() - imported, importedRecords);
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(previousAutoCommit);
+        }
+    }
+
+    /** Creates a SQLite-consistent backup, including committed WAL content. */
+    public void backupTo(Path backupFile) throws SQLException {
+        String escapedPath = backupFile.toAbsolutePath().toString().replace("'", "''");
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("VACUUM INTO '" + escapedPath + "'");
+        }
     }
 
     public List<DailyWeatherSummary> findDailySummaries(LocalDate fromInclusive, LocalDate toInclusive, String city) throws SQLException {

@@ -17,6 +17,12 @@ final class WeatherAppPaths {
         return applicationDirectory().resolve("settings.properties");
     }
 
+    static Path backupsDirectory() throws IOException {
+        Path backupsDirectory = applicationDirectory().resolve("backups");
+        Files.createDirectories(backupsDirectory);
+        return backupsDirectory;
+    }
+
     private static Path applicationDirectory() throws IOException {
         String localAppData = System.getenv("LOCALAPPDATA");
         Path applicationDirectory = localAppData == null || localAppData.isBlank()

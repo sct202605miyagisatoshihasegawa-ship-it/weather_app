@@ -8,10 +8,8 @@ import java.awt.GridLayout;
 import java.awt.Toolkit;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -26,6 +24,7 @@ import java.util.Map;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -35,6 +34,7 @@ import javax.swing.JSpinner;
 import javax.swing.JTabbedPane;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import javax.swing.SpinnerNumberModel;
 
 import org.jfree.chart.ChartFactory;
@@ -50,9 +50,6 @@ public class WeatherApp extends JFrame {
 			"London,GB", "Mumbai,IN", "Sydney,AU",
 			"Beijing,CN", "Madrid,ES", "New York,US"
 	};
-
-	private static final String CSV_FILE = System.getProperty("user.home") + File.separator + "Desktop" + File.separator
-			+ "weather_data.csv";
 
 	private WeatherApiClient weatherApiClient;
 	private SettingsService settingsService;
@@ -167,16 +164,18 @@ public class WeatherApp extends JFrame {
 		JPanel testPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
 		JButton notificationTestButton = new JButton("通知テスト");
 		JButton stopNotificationButton = new JButton("通知を停止");
+		JButton csvImportButton = new JButton("CSV移行");
 		notificationTestButton.addActionListener(e -> runNotificationTest());
 		stopNotificationButton.addActionListener(e -> alertNotifier.stop());
+		csvImportButton.addActionListener(e -> chooseAndImportCsv());
 		testPanel.add(notificationTestButton);
 		testPanel.add(stopNotificationButton);
+		testPanel.add(csvImportButton);
 		southPanel.add(testPanel, BorderLayout.SOUTH);
 
 		add(southPanel, BorderLayout.SOUTH);
 
-		loadCsvToGraph();
-		startDataCollectionTimer();
+		loadDatabaseToGraphAndStartCollection();
 	}
 
 	private void initDatasets() {
@@ -321,38 +320,89 @@ public class WeatherApp extends JFrame {
 	private void checkPressureFluctuation(WeatherRecord current) {
 		pressureAlertService.evaluate(current, sendaiHistory).ifPresent(alertNotifier::notifyAlert);
 	}
-	private void loadCsvToGraph() {
-		File file = new File(CSV_FILE);
-		if (!file.exists())
-			return;
 
-		try (BufferedReader br = new BufferedReader(new FileReader(file))) {
-			String line;
-			while ((line = br.readLine()) != null) {
-				String[] data = line.split(",");
-				if (data.length < 5)
-					continue;
-
-				LocalDateTime dt = LocalDateTime.parse(data[0]);
-				String city = data[1];
-				double temp = Double.parseDouble(data[2]);
-				double humid = Double.parseDouble(data[3]);
-				double press = Double.parseDouble(data[4]);
-				WeatherRecord record = new WeatherRecord(dt, city, temp, humid, press);
-				if (city.equals("Sendai,JP")) {
-					sendaiHistory.add(record);
-				}
-				if (tempSeriesMap.containsKey(city)) {
-					Date date = Date.from(dt.atZone(ZoneId.systemDefault()).toInstant());
-					Minute minute = new Minute(date);
-					tempSeriesMap.get(city).addOrUpdate(minute, temp);
-					humidSeriesMap.get(city).addOrUpdate(minute, humid);
-					pressSeriesMap.get(city).addOrUpdate(minute, press);
+	private void loadDatabaseToGraphAndStartCollection() {
+		new SwingWorker<List<WeatherRecord>, Void>() {
+			@Override
+			protected List<WeatherRecord> doInBackground() throws Exception {
+				try (WeatherRepository repository = new WeatherRepository(WeatherAppPaths.databaseFile())) {
+					return repository.findAll();
 				}
 			}
-		} catch (Exception e) {
-			System.err.println("CSV読み込みスキップ: " + e.getMessage());
+
+			@Override
+			protected void done() {
+				try {
+					replaceGraphRecords(get());
+					startDataCollectionTimer();
+				} catch (Exception e) {
+					JOptionPane.showMessageDialog(WeatherApp.this, "SQLiteデータを読み込めません: " + e.getMessage(),
+							"データ読み込みエラー", JOptionPane.ERROR_MESSAGE);
+				}
+			}
+		}.execute();
+	}
+
+	private void replaceGraphRecords(List<WeatherRecord> records) {
+		sendaiHistory.clear();
+		for (TimeSeries series : tempSeriesMap.values()) series.clear();
+		for (TimeSeries series : humidSeriesMap.values()) series.clear();
+		for (TimeSeries series : pressSeriesMap.values()) series.clear();
+		for (WeatherRecord record : records) {
+			addRecordToGraphs(record);
 		}
+	}
+
+	private void chooseAndImportCsv() {
+		JFileChooser chooser = new JFileChooser();
+		if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+			importCsv(chooser.getSelectedFile().toPath());
+		}
+	}
+
+	private void importCsv(Path csvFile) {
+		new SwingWorker<CsvImportResult, Void>() {
+			@Override
+			protected CsvImportResult doInBackground() throws Exception {
+				List<WeatherRecord> records = new WeatherCsvImporter().readAll(csvFile);
+				try (WeatherRepository repository = new WeatherRepository(WeatherAppPaths.databaseFile())) {
+					String timestamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmssSSS").format(LocalDateTime.now());
+					repository.backupTo(WeatherAppPaths.backupsDirectory().resolve("weather-before-csv-import-" + timestamp + ".db"));
+					return repository.importIfAbsent(records);
+				}
+			}
+
+			@Override
+			protected void done() {
+				try {
+					CsvImportResult result = get();
+					for (WeatherRecord record : result.importedRecords()) addRecordToGraphs(record);
+					JOptionPane.showMessageDialog(WeatherApp.this,
+							"CSV移行が完了しました\n追加: " + result.importedCount() + "件\n重複スキップ: " + result.skippedDuplicateCount() + "件\n不正行: 0件",
+							"CSV移行", JOptionPane.INFORMATION_MESSAGE);
+				} catch (Exception e) {
+					Throwable cause = e.getCause() == null ? e : e.getCause();
+					if (cause instanceof WeatherCsvFormatException formatError) {
+						JOptionPane.showMessageDialog(WeatherApp.this,
+								"CSVの不正行: " + formatError.invalidRowCount() + "件\nSQLiteは変更していません。\n" + formatError.getMessage(),
+								"CSV移行エラー", JOptionPane.ERROR_MESSAGE);
+					} else {
+						JOptionPane.showMessageDialog(WeatherApp.this, "CSV移行に失敗しました: " + cause.getMessage(),
+								"CSV移行エラー", JOptionPane.ERROR_MESSAGE);
+					}
+				}
+			}
+		}.execute();
+	}
+
+	private void addRecordToGraphs(WeatherRecord record) {
+		if (record.city().equals("Sendai,JP")) sendaiHistory.add(record);
+		if (!tempSeriesMap.containsKey(record.city())) return;
+		Date date = Date.from(record.dateTime().atZone(ZoneId.systemDefault()).toInstant());
+		Minute minute = new Minute(date);
+		tempSeriesMap.get(record.city()).addOrUpdate(minute, record.temperature());
+		humidSeriesMap.get(record.city()).addOrUpdate(minute, record.humidity());
+		pressSeriesMap.get(record.city()).addOrUpdate(minute, record.pressure());
 	}
 
 	public static void main(String[] args) {
