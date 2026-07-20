@@ -11,11 +11,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.PrintWriter;
-import java.net.HttpURLConnection;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -26,8 +22,6 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -58,6 +52,8 @@ public class WeatherApp extends JFrame {
 	private static final String CSV_FILE = System.getProperty("user.home") + File.separator + "Desktop" + File.separator
 			+ "weather_data.csv";
 
+	private final WeatherApiClient weatherApiClient;
+
 	private TimeSeriesCollection tempDataset = new TimeSeriesCollection();
 	private TimeSeriesCollection humidDataset = new TimeSeriesCollection();
 	private TimeSeriesCollection pressDataset = new TimeSeriesCollection();
@@ -76,6 +72,11 @@ public class WeatherApp extends JFrame {
 	private double lastSendaiPressure = 1013.0;
 
 	public WeatherApp() {
+		this(new OpenWeatherMapClient(API_KEY));
+	}
+
+	WeatherApp(WeatherApiClient weatherApiClient) {
+		this.weatherApiClient = weatherApiClient;
 		setTitle("お天気データロガー（世界主要都市）ver2.0");
 		setSize(1000, 650);
 		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -292,48 +293,12 @@ public class WeatherApp extends JFrame {
 		}).start();
 }
 	private WeatherRecord fetchWeatherDataFromApi(String city) {
-    		try {
-    			 // 1. 都市名を安全にエンコード（スペースやカンマ対策）
-                String encodedCity = URLEncoder.encode(city, StandardCharsets.UTF_8.name());
-                
-                // 2. ⭕ これがデータを引き抜くための本物のAPI専用URLです（途中で切れないよう1行で記述しています）
-                String urlStr = "https://api.openweathermap.org/data/2.5/weather?q=" + encodedCity + "&appid=" + API_KEY + "&units=metric";
-                
-                java.net.URI uri = java.net.URI.create(urlStr);
-                java.net.URL url = uri.toURL();
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("GET");
-                
-                if (conn.getResponseCode() == 200) {
-                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                    StringBuilder response = new StringBuilder();
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        response.append(line);
-                    }
-                    br.close();
-                    
-                    double temp = Double.parseDouble(jsonExtract(response.toString(), "\"temp\":([\\d.-]+)"));
-                    double humidity = Double.parseDouble(jsonExtract(response.toString(), "\"humidity\":([\\d.]+)"));
-                    double pressure = Double.parseDouble(jsonExtract(response.toString(), "\"pressure\":([\\d.]+)"));
-                    
-                    return new WeatherRecord(LocalDateTime.now(), city, temp, humidity, pressure);
-                } else {
-                    System.err.println("APIエラー (" + city + "): HTTP " + conn.getResponseCode());
-                }
-            } catch (Exception e) {
-                System.err.println("データ取得失敗 (" + city + "): " + e.getMessage());
-            }
-            return null;
-    			}
-
-	private String jsonExtract(String json, String regex) {
-		Pattern pattern = Pattern.compile(regex);
-		Matcher matcher = pattern.matcher(json);
-		if (matcher.find()) {
-			return matcher.group(1);
+		try {
+			return weatherApiClient.fetch(city);
+		} catch (WeatherApiException e) {
+			System.err.println("Weather API error (" + city + "): " + e.getMessage());
+			return null;
 		}
-		return "0";
 	}
 
 	private synchronized void saveToCsv(WeatherRecord record) {
@@ -384,4 +349,3 @@ public class WeatherApp extends JFrame {
 		SwingUtilities.invokeLater(() -> new WeatherApp().setVisible(true));
 	}
 }
-
