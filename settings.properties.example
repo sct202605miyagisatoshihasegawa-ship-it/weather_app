@@ -1,3 +1,4 @@
 # OpenWeatherMap API key
 # Copy this file to settings.properties and replace the placeholder.
 openweather.api.key=YOUR_API_KEY_HERE
+collection.interval.minutes=15

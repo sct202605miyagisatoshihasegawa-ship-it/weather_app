@@ -4,6 +4,7 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.GridLayout;
 import java.awt.Toolkit;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -24,12 +25,17 @@ import java.util.Map;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JDialog;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPasswordField;
+import javax.swing.JSpinner;
 import javax.swing.JTabbedPane;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
+import javax.swing.SpinnerNumberModel;
 
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartPanel;
@@ -39,9 +45,6 @@ import org.jfree.data.time.TimeSeries;
 import org.jfree.data.time.TimeSeriesCollection;
 
 public class WeatherApp extends JFrame {
-	// ⚠️ ご自身のAPIキーに書き換えてください
-	private static final String API_KEY = "YOUR_API_KEY_HERE";
-
 	private final String[] CITIES = {
 			"Sendai,JP", "Tokyo,JP", "Niigata,JP",
 			"London,GB", "Mumbai,IN", "Sydney,AU",
@@ -51,7 +54,9 @@ public class WeatherApp extends JFrame {
 	private static final String CSV_FILE = System.getProperty("user.home") + File.separator + "Desktop" + File.separator
 			+ "weather_data.csv";
 
-	private final WeatherApiClient weatherApiClient;
+	private WeatherApiClient weatherApiClient;
+	private SettingsService settingsService;
+	private AppSettings settings;
 	private final PressureAlertService pressureAlertService = new PressureAlertService();
 	private WeatherDataService weatherDataService;
 	private AlertNotifier alertNotifier;
@@ -72,11 +77,13 @@ public class WeatherApp extends JFrame {
 	private JLabel collectionStatusLabel;
 
 	public WeatherApp() {
-		this(new OpenWeatherMapClient(API_KEY));
-	}
-
-	WeatherApp(WeatherApiClient weatherApiClient) {
-		this.weatherApiClient = weatherApiClient;
+		try {
+			settingsService = new SettingsService(WeatherAppPaths.settingsFile());
+			settings = settingsService.load();
+			weatherApiClient = new OpenWeatherMapClient(settings.apiKey());
+		} catch (IOException e) {
+			throw new IllegalStateException("Could not load application settings", e);
+		}
 		setTitle("お天気データロガー（世界主要都市）ver2.0");
 		setSize(1000, 650);
 		setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
@@ -129,6 +136,9 @@ public class WeatherApp extends JFrame {
 		alertNotifier = new ScheduledAlertNotifier(
 				text -> SwingUtilities.invokeLater(() -> alertLabel.setText(text + "   ")),
 				() -> Toolkit.getDefaultToolkit().beep());
+		JButton settingsButton = new JButton("設定");
+		settingsButton.addActionListener(e -> showSettingsDialog());
+		headerPanel.add(settingsButton, BorderLayout.CENTER);
 		headerPanel.add(alertLabel, BorderLayout.EAST);
 		add(headerPanel, BorderLayout.NORTH);
 
@@ -201,14 +211,59 @@ public class WeatherApp extends JFrame {
 	}
 
 	private void startDataCollectionTimer() {
+		startDataCollectionTimer(true);
+	}
+
+	private void startDataCollectionTimer(boolean collectImmediately) {
 		try {
 			WeatherRepository repository = new WeatherRepository(WeatherAppPaths.databaseFile());
 			weatherDataService = new WeatherDataService(List.of(CITIES), weatherApiClient, repository,
 					this::processNewRecord, this::handleCollectionFailure, this::updateCollectionStatus);
-			weatherDataService.start(Duration.ofMinutes(15));
+			Duration interval = Duration.ofMinutes(settings.collectionIntervalMinutes());
+			weatherDataService.start(interval, collectImmediately ? Duration.ZERO : interval);
 		} catch (IOException | SQLException e) {
 			throw new IllegalStateException("Could not start weather data collection", e);
 		}
+	}
+
+	private void showSettingsDialog() {
+		JDialog dialog = new JDialog(this, "設定", true);
+		JPanel panel = new JPanel(new GridLayout(3, 2, 8, 8));
+		JPasswordField apiKeyField = new JPasswordField(settings.apiKey(), 24);
+		JSpinner intervalSpinner = new JSpinner(new SpinnerNumberModel(settings.collectionIntervalMinutes(), 1, 1440, 1));
+		JButton saveButton = new JButton("保存");
+		JButton cancelButton = new JButton("キャンセル");
+
+		panel.add(new JLabel("OpenWeatherMap APIキー"));
+		panel.add(apiKeyField);
+		panel.add(new JLabel("取得間隔（分）"));
+		panel.add(intervalSpinner);
+		panel.add(cancelButton);
+		panel.add(saveButton);
+		cancelButton.addActionListener(e -> dialog.dispose());
+		saveButton.addActionListener(e -> {
+			try {
+				applySettings(new AppSettings(new String(apiKeyField.getPassword()).trim(), (Integer) intervalSpinner.getValue()));
+				dialog.dispose();
+			} catch (IOException | SQLException ex) {
+				JOptionPane.showMessageDialog(dialog, "設定を保存できません: " + ex.getMessage(), "設定エラー", JOptionPane.ERROR_MESSAGE);
+			}
+		});
+		dialog.setContentPane(panel);
+		dialog.pack();
+		dialog.setLocationRelativeTo(this);
+		dialog.setVisible(true);
+	}
+
+	private void applySettings(AppSettings updatedSettings) throws IOException, SQLException {
+		settingsService.save(updatedSettings);
+		if (weatherDataService != null) {
+			weatherDataService.close();
+		}
+		settings = updatedSettings;
+		weatherApiClient = new OpenWeatherMapClient(settings.apiKey());
+		startDataCollectionTimer(false);
+		collectionStatusLabel.setText("設定を保存しました。次回取得を待機中");
 	}
 
 	private void handleCollectionFailure(String city, Exception error) {

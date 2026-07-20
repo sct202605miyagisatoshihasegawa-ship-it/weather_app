@@ -34,10 +34,17 @@ public final class WeatherDataService implements AutoCloseable {
     }
 
     public void start(Duration interval) {
+        start(interval, Duration.ZERO);
+    }
+
+    public void start(Duration interval, Duration initialDelay) {
         if (interval.isZero() || interval.isNegative()) {
             throw new IllegalArgumentException("Collection interval must be positive");
         }
-        scheduler.scheduleAtFixedRate(this::collectNow, 0, interval.toMillis(), TimeUnit.MILLISECONDS);
+        if (initialDelay.isNegative()) {
+            throw new IllegalArgumentException("Initial delay must not be negative");
+        }
+        scheduler.scheduleAtFixedRate(this::collectNow, initialDelay.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     public void collectNow() {

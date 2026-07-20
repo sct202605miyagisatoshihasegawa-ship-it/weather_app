@@ -35,10 +35,8 @@
 
 ### 2. APIキーの設定
 1. [OpenWeatherMap](https://openweathermap.org) で無料のアカウントを作成し、APIキー（Current Weather API）を発行します。
-2. `WeatherApp.java` の最上部にある定数 `API_KEY` に、発行したご自身のキーを貼り付けてください。
-   ```java
-   private static final String API_KEY = "ここにあなたのAPIキーを貼り付け";
-   ```
+2. アプリ起動後に画面上部の「設定」を開き、APIキーと取得間隔を保存してください。
+3. 設定は `%LOCALAPPDATA%\WeatherApp\settings.properties` に保存され、Git管理されません。APIキーをソースコードへ書き込まないでください。
 
 ### 3. アプリの起動
 `WeatherApp.java` を実行すると、メイン画面が立ち上がります。

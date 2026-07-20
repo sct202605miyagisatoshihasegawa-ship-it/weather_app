@@ -10,11 +10,19 @@ final class WeatherAppPaths {
     }
 
     static Path databaseFile() throws IOException {
+        return applicationDirectory().resolve("weather.db");
+    }
+
+    static Path settingsFile() throws IOException {
+        return applicationDirectory().resolve("settings.properties");
+    }
+
+    private static Path applicationDirectory() throws IOException {
         String localAppData = System.getenv("LOCALAPPDATA");
         Path applicationDirectory = localAppData == null || localAppData.isBlank()
                 ? Path.of(System.getProperty("user.home"), ".weather-app")
                 : Path.of(localAppData, "WeatherApp");
         Files.createDirectories(applicationDirectory);
-        return applicationDirectory.resolve("weather.db");
+        return applicationDirectory;
     }
 }
