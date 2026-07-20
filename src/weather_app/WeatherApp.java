@@ -23,6 +23,7 @@ import java.util.Map;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
@@ -32,6 +33,7 @@ import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JSpinner;
 import javax.swing.JTabbedPane;
+import javax.swing.JTextField;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
@@ -57,6 +59,10 @@ public class WeatherApp extends JFrame {
 	private final PressureAlertService pressureAlertService = new PressureAlertService();
 	private WeatherDataService weatherDataService;
 	private AlertNotifier alertNotifier;
+	private JComboBox<String> graphPeriodSelector;
+	private JTextField graphFromField;
+	private JTextField graphToField;
+	private GraphPeriod displayedGraphPeriod;
 
 	private TimeSeriesCollection tempDataset = new TimeSeriesCollection();
 	private TimeSeriesCollection humidDataset = new TimeSeriesCollection();
@@ -137,7 +143,10 @@ public class WeatherApp extends JFrame {
 		settingsButton.addActionListener(e -> showSettingsDialog());
 		headerPanel.add(settingsButton, BorderLayout.CENTER);
 		headerPanel.add(alertLabel, BorderLayout.EAST);
-		add(headerPanel, BorderLayout.NORTH);
+		JPanel northPanel = new JPanel(new BorderLayout());
+		northPanel.add(headerPanel, BorderLayout.NORTH);
+		northPanel.add(createGraphPeriodPanel(), BorderLayout.SOUTH);
+		add(northPanel, BorderLayout.NORTH);
 
 		JTabbedPane tabbedPane = new JTabbedPane();
 		tabbedPane.addTab("気温", new ChartPanel(tempChart));
@@ -176,6 +185,33 @@ public class WeatherApp extends JFrame {
 		add(southPanel, BorderLayout.SOUTH);
 
 		loadDatabaseToGraphAndStartCollection();
+	}
+
+	private JPanel createGraphPeriodPanel() {
+		JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+		graphPeriodSelector = new JComboBox<>(new String[] { "1日", "1週間", "1年", "任意期間" });
+		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+		LocalDateTime now = LocalDateTime.now();
+		graphFromField = new JTextField(formatter.format(now.minusDays(1)), 16);
+		graphToField = new JTextField(formatter.format(now), 16);
+		JButton updateButton = new JButton("表示更新");
+		graphPeriodSelector.addActionListener(e -> updateCustomPeriodFields());
+		updateButton.addActionListener(e -> reloadSelectedGraph());
+		panel.add(new JLabel("表示期間"));
+		panel.add(graphPeriodSelector);
+		panel.add(new JLabel("開始"));
+		panel.add(graphFromField);
+		panel.add(new JLabel("終了"));
+		panel.add(graphToField);
+		panel.add(updateButton);
+		updateCustomPeriodFields();
+		return panel;
+	}
+
+	private void updateCustomPeriodFields() {
+		boolean custom = "任意期間".equals(graphPeriodSelector.getSelectedItem());
+		graphFromField.setEnabled(custom);
+		graphToField.setEnabled(custom);
 	}
 
 	private void initDatasets() {
@@ -291,6 +327,7 @@ public class WeatherApp extends JFrame {
 		Minute minute = new Minute(date);
 
 		SwingUtilities.invokeLater(() -> {
+			if (displayedGraphPeriod == null || !displayedGraphPeriod.contains(record.dateTime())) return;
 			tempSeriesMap.get(record.city()).addOrUpdate(minute, record.temperature());
 			humidSeriesMap.get(record.city()).addOrUpdate(minute, record.humidity());
 			pressSeriesMap.get(record.city()).addOrUpdate(minute, record.pressure());
@@ -322,11 +359,39 @@ public class WeatherApp extends JFrame {
 	}
 
 	private void loadDatabaseToGraphAndStartCollection() {
+		loadGraph(GraphPeriod.lastDay(LocalDateTime.now()), true);
+	}
+
+	private void reloadSelectedGraph() {
+		try {
+			LocalDateTime now = LocalDateTime.now();
+			GraphPeriod period = switch ((String) graphPeriodSelector.getSelectedItem()) {
+			case "1日" -> GraphPeriod.lastDay(now);
+			case "1週間" -> GraphPeriod.lastWeek(now);
+			case "1年" -> GraphPeriod.lastYear(now);
+			case "任意期間" -> GraphPeriod.custom(parseGraphDate(graphFromField.getText()), parseGraphDate(graphToField.getText()));
+			default -> throw new IllegalStateException("未知の表示期間です");
+			};
+			loadGraph(period, false);
+		} catch (IllegalArgumentException e) {
+			JOptionPane.showMessageDialog(this, e.getMessage(), "表示期間エラー", JOptionPane.ERROR_MESSAGE);
+		}
+	}
+
+	private LocalDateTime parseGraphDate(String text) {
+		try {
+			return LocalDateTime.parse(text.trim(), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+		} catch (Exception e) {
+			throw new IllegalArgumentException("日時は yyyy-MM-dd HH:mm 形式で入力してください");
+		}
+	}
+
+	private void loadGraph(GraphPeriod period, boolean startCollectionAfterLoad) {
 		new SwingWorker<List<WeatherRecord>, Void>() {
 			@Override
 			protected List<WeatherRecord> doInBackground() throws Exception {
 				try (WeatherRepository repository = new WeatherRepository(WeatherAppPaths.databaseFile())) {
-					return repository.findAll();
+					return new WeatherGraphDataService().load(repository, List.of(CITIES), period);
 				}
 			}
 
@@ -334,7 +399,8 @@ public class WeatherApp extends JFrame {
 			protected void done() {
 				try {
 					replaceGraphRecords(get());
-					startDataCollectionTimer();
+					displayedGraphPeriod = period;
+					if (startCollectionAfterLoad) startDataCollectionTimer();
 				} catch (Exception e) {
 					JOptionPane.showMessageDialog(WeatherApp.this, "SQLiteデータを読み込めません: " + e.getMessage(),
 							"データ読み込みエラー", JOptionPane.ERROR_MESSAGE);
@@ -376,9 +442,7 @@ public class WeatherApp extends JFrame {
 			protected void done() {
 				try {
 					CsvImportResult result = get();
-					updateGraphsInBatch(() -> {
-						for (WeatherRecord record : result.importedRecords()) addRecordToGraphs(record);
-					});
+					if (displayedGraphPeriod != null) loadGraph(displayedGraphPeriod, false);
 					JOptionPane.showMessageDialog(WeatherApp.this,
 							"CSV移行が完了しました\n追加: " + result.importedCount() + "件\n重複スキップ: " + result.skippedDuplicateCount() + "件\n不正行: 0件",
 							"CSV移行", JOptionPane.INFORMATION_MESSAGE);
