@@ -51,6 +51,7 @@ public class WeatherApp extends JFrame {
 	private final WeatherApiClient weatherApiClient;
 	private final PressureAlertService pressureAlertService = new PressureAlertService();
 	private WeatherDataService weatherDataService;
+	private AlertNotifier alertNotifier;
 
 	private TimeSeriesCollection tempDataset = new TimeSeriesCollection();
 	private TimeSeriesCollection humidDataset = new TimeSeriesCollection();
@@ -115,6 +116,9 @@ public class WeatherApp extends JFrame {
 		alertLabel = new JLabel(" ", SwingConstants.RIGHT);
 		alertLabel.setFont(new Font("MS Gothic", Font.BOLD, 14));
 		alertLabel.setForeground(Color.RED);
+		alertNotifier = new ScheduledAlertNotifier(
+				text -> SwingUtilities.invokeLater(() -> alertLabel.setText(text + "   ")),
+				() -> Toolkit.getDefaultToolkit().beep());
 		headerPanel.add(alertLabel, BorderLayout.EAST);
 		add(headerPanel, BorderLayout.NORTH);
 
@@ -238,34 +242,8 @@ public class WeatherApp extends JFrame {
 	}
 
 	private void checkPressureFluctuation(WeatherRecord current) {
-		pressureAlertService.evaluate(current, sendaiHistory).ifPresent(alert -> {
-			double difference = alert.pressureDifference();
-			if (alert.isRising()) {
-				System.out.println("⚠️ 仙台の気圧が急上昇！(" + String.format("%.1f", difference) + " hPa) 音を1回鳴らします。");
-				updateAlertUI("⚠️ 仙台の気圧急上昇！(" + String.format("%.1f", difference) + " hPa)", 1);
-			} else {
-				System.out.println("⚠️ 仙台の気圧が急降下！(" + String.format("%.1f", difference) + " hPa) 音を3回鳴らします。");
-				updateAlertUI("⚠️ 仙台の気圧急降下！(" + String.format("%.1f", difference) + " hPa)", 3);
-			}
-		});
+		pressureAlertService.evaluate(current, sendaiHistory).ifPresent(alertNotifier::notifyAlert);
 	}
-
-	// 🔍 UIの警告文字を書き換え、音を別スレッドで鳴らす（画面フリーズ対策）
-	private void updateAlertUI(String text, int beepCount) {
-		SwingUtilities.invokeLater(() -> alertLabel.setText(text + "   "));
-		// 音を鳴らす（連続ビープで画面が固まらないよう別スレッドで実行）
-		new Thread(() -> {
-			for (int i = 0; i < beepCount; i++) {
-				Toolkit.getDefaultToolkit().beep();
-				try {
-					Thread.sleep(1200);
-					// ポーン、ポーンの間隔（1.2秒）
-				} catch (InterruptedException e) {
-					e.printStackTrace();
-				}
-			}
-		}).start();
-}
 	private void loadCsvToGraph() {
 		File file = new File(CSV_FILE);
 		if (!file.exists())
