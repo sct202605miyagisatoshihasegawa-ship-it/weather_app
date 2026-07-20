@@ -12,7 +12,9 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -33,7 +35,6 @@ import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JSpinner;
 import javax.swing.JTabbedPane;
-import javax.swing.JTextField;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
@@ -60,8 +61,8 @@ public class WeatherApp extends JFrame {
 	private WeatherDataService weatherDataService;
 	private AlertNotifier alertNotifier;
 	private JComboBox<String> graphPeriodSelector;
-	private JTextField graphFromField;
-	private JTextField graphToField;
+	private JSpinner graphFromSpinner;
+	private JSpinner graphToSpinner;
 	private GraphPeriod displayedGraphPeriod;
 
 	private TimeSeriesCollection tempDataset = new TimeSeriesCollection();
@@ -190,28 +191,53 @@ public class WeatherApp extends JFrame {
 	private JPanel createGraphPeriodPanel() {
 		JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
 		graphPeriodSelector = new JComboBox<>(new String[] { "1日", "1週間", "1年", "任意期間" });
-		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
-		LocalDateTime now = LocalDateTime.now();
-		graphFromField = new JTextField(formatter.format(now.minusDays(1)), 16);
-		graphToField = new JTextField(formatter.format(now), 16);
+		LocalDate today = LocalDate.now();
+		graphFromSpinner = createDateSpinner(today.minusDays(1));
+		graphToSpinner = createDateSpinner(today);
 		JButton updateButton = new JButton("表示更新");
+		JButton currentMonthButton = new JButton("今月");
+		JButton previousMonthButton = new JButton("先月");
+		JButton lastThirtyDaysButton = new JButton("過去30日");
 		graphPeriodSelector.addActionListener(e -> updateCustomPeriodFields());
 		updateButton.addActionListener(e -> reloadSelectedGraph());
+		currentMonthButton.addActionListener(e -> selectCustomRange(today.withDayOfMonth(1), today));
+		previousMonthButton.addActionListener(e -> {
+			YearMonth previousMonth = YearMonth.from(today).minusMonths(1);
+			selectCustomRange(previousMonth.atDay(1), previousMonth.atEndOfMonth());
+		});
+		lastThirtyDaysButton.addActionListener(e -> selectCustomRange(today.minusDays(29), today));
 		panel.add(new JLabel("表示期間"));
 		panel.add(graphPeriodSelector);
 		panel.add(new JLabel("開始"));
-		panel.add(graphFromField);
+		panel.add(graphFromSpinner);
 		panel.add(new JLabel("終了"));
-		panel.add(graphToField);
+		panel.add(graphToSpinner);
+		panel.add(currentMonthButton);
+		panel.add(previousMonthButton);
+		panel.add(lastThirtyDaysButton);
 		panel.add(updateButton);
 		updateCustomPeriodFields();
 		return panel;
 	}
 
+	private JSpinner createDateSpinner(LocalDate date) {
+		Date initialValue = Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant());
+		JSpinner spinner = new JSpinner(new javax.swing.SpinnerDateModel(initialValue, null, null, java.util.Calendar.DAY_OF_MONTH));
+		spinner.setEditor(new JSpinner.DateEditor(spinner, "yyyy-MM-dd"));
+		return spinner;
+	}
+
 	private void updateCustomPeriodFields() {
 		boolean custom = "任意期間".equals(graphPeriodSelector.getSelectedItem());
-		graphFromField.setEnabled(custom);
-		graphToField.setEnabled(custom);
+		graphFromSpinner.setEnabled(custom);
+		graphToSpinner.setEnabled(custom);
+	}
+
+	private void selectCustomRange(LocalDate fromInclusive, LocalDate toInclusive) {
+		graphPeriodSelector.setSelectedItem("任意期間");
+		graphFromSpinner.setValue(Date.from(fromInclusive.atStartOfDay(ZoneId.systemDefault()).toInstant()));
+		graphToSpinner.setValue(Date.from(toInclusive.atStartOfDay(ZoneId.systemDefault()).toInstant()));
+		reloadSelectedGraph();
 	}
 
 	private void initDatasets() {
@@ -369,7 +395,8 @@ public class WeatherApp extends JFrame {
 			case "1日" -> GraphPeriod.lastDay(now);
 			case "1週間" -> GraphPeriod.lastWeek(now);
 			case "1年" -> GraphPeriod.lastYear(now);
-			case "任意期間" -> GraphPeriod.custom(parseGraphDate(graphFromField.getText()), parseGraphDate(graphToField.getText()));
+			case "任意期間" -> GraphPeriod.custom(selectedGraphDate(graphFromSpinner).atStartOfDay(),
+					selectedGraphDate(graphToSpinner).plusDays(1).atStartOfDay());
 			default -> throw new IllegalStateException("未知の表示期間です");
 			};
 			loadGraph(period, false);
@@ -378,12 +405,9 @@ public class WeatherApp extends JFrame {
 		}
 	}
 
-	private LocalDateTime parseGraphDate(String text) {
-		try {
-			return LocalDateTime.parse(text.trim(), DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
-		} catch (Exception e) {
-			throw new IllegalArgumentException("日時は yyyy-MM-dd HH:mm 形式で入力してください");
-		}
+	private LocalDate selectedGraphDate(JSpinner spinner) {
+		Date date = (Date) spinner.getValue();
+		return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
 	}
 
 	private void loadGraph(GraphPeriod period, boolean startCollectionAfterLoad) {
