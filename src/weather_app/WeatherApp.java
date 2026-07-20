@@ -5,6 +5,8 @@ import java.awt.Color;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Toolkit;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -13,6 +15,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
@@ -66,9 +69,7 @@ public class WeatherApp extends JFrame {
 
 	// 🔍 右上の警告表示用ラベル
 	private JLabel alertLabel;
-
-	// 🔍 最後に保存された仙台の気圧（テストボタン用）
-	private double lastSendaiPressure = 1013.0;
+	private JLabel collectionStatusLabel;
 
 	public WeatherApp() {
 		this(new OpenWeatherMapClient(API_KEY));
@@ -78,8 +79,14 @@ public class WeatherApp extends JFrame {
 		this.weatherApiClient = weatherApiClient;
 		setTitle("お天気データロガー（世界主要都市）ver2.0");
 		setSize(1000, 650);
-		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
 		setLocationRelativeTo(null);
+		addWindowListener(new WindowAdapter() {
+			@Override
+			public void windowClosing(WindowEvent event) {
+				shutdownApplication();
+			}
+		});
 
 		initDatasets();
 
@@ -113,6 +120,9 @@ public class WeatherApp extends JFrame {
 
 		// 🔍 右上の警告ラベルの作成（ヘッダーパネルとして最上部に追加）
 		JPanel headerPanel = new JPanel(new BorderLayout());
+		collectionStatusLabel = new JLabel("待機中", SwingConstants.LEFT);
+		collectionStatusLabel.setFont(new Font("MS Gothic", Font.PLAIN, 12));
+		headerPanel.add(collectionStatusLabel, BorderLayout.WEST);
 		alertLabel = new JLabel(" ", SwingConstants.RIGHT);
 		alertLabel.setFont(new Font("MS Gothic", Font.BOLD, 14));
 		alertLabel.setForeground(Color.RED);
@@ -128,7 +138,7 @@ public class WeatherApp extends JFrame {
 		tabbedPane.addTab("気圧", new ChartPanel(pressChart));
 		add(tabbedPane, BorderLayout.CENTER);
 
-		// 4. 下部の都市切り替えチェックボックス ＆ 🛠️ テスト用デバッグボタン
+		// 4. 下部の都市切り替えチェックボックスと通知操作
 		JPanel southPanel = new JPanel(new BorderLayout());
 
 		JPanel controlPanel = new JPanel();
@@ -143,16 +153,14 @@ public class WeatherApp extends JFrame {
 		}
 		southPanel.add(controlPanel, BorderLayout.CENTER);
 
-		// 🛠️ テストボタン用パネル（右下に配置）
+		// 通知テストは観測データ・SQLite・CSV・グラフを変更しない
 		JPanel testPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-		JButton btnUp = new JButton("🧪 テスト: 気圧上昇(+3.5hPa)");
-		JButton btnDown = new JButton("🧪 テスト: 気圧降下(-3.5hPa)");
-
-		btnUp.addActionListener(e -> injectDummyData(3.5));
-		btnDown.addActionListener(e -> injectDummyData(-3.5));
-
-		testPanel.add(btnUp);
-		testPanel.add(btnDown);
+		JButton notificationTestButton = new JButton("通知テスト");
+		JButton stopNotificationButton = new JButton("通知を停止");
+		notificationTestButton.addActionListener(e -> runNotificationTest());
+		stopNotificationButton.addActionListener(e -> alertNotifier.stop());
+		testPanel.add(notificationTestButton);
+		testPanel.add(stopNotificationButton);
 		southPanel.add(testPanel, BorderLayout.SOUTH);
 
 		add(southPanel, BorderLayout.SOUTH);
@@ -196,7 +204,7 @@ public class WeatherApp extends JFrame {
 		try {
 			WeatherRepository repository = new WeatherRepository(WeatherAppPaths.databaseFile());
 			weatherDataService = new WeatherDataService(List.of(CITIES), weatherApiClient, repository,
-					this::processNewRecord, this::handleCollectionFailure);
+					this::processNewRecord, this::handleCollectionFailure, this::updateCollectionStatus);
 			weatherDataService.start(Duration.ofMinutes(15));
 		} catch (IOException | SQLException e) {
 			throw new IllegalStateException("Could not start weather data collection", e);
@@ -207,11 +215,21 @@ public class WeatherApp extends JFrame {
 		System.err.println("Weather collection failed (" + city + "): " + error.getMessage());
 	}
 
+	private void updateCollectionStatus(WeatherCollectionStatus status) {
+		SwingUtilities.invokeLater(() -> {
+			String timestamp = status.timestamp().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+			switch (status.state()) {
+			case FETCHING -> collectionStatusLabel.setText("取得中...");
+			case SUCCESS -> collectionStatusLabel.setText("最終成功: " + timestamp);
+			case FAILURE -> collectionStatusLabel.setText(status.detail() + "（連続" + status.consecutiveFailures() + "回）");
+			}
+		});
+	}
+
 	// 🔍 新しいデータを処理・反映する共通メソッド（API経由・ダミー共通）
 	private void processNewRecord(WeatherRecord record) {
 		if (record.city().equals("Sendai,JP")) {
 			checkPressureFluctuation(record);
-			lastSendaiPressure = record.pressure();
 			sendaiHistory.add(record);
 		}
 
@@ -225,20 +243,24 @@ public class WeatherApp extends JFrame {
 		});
 	}
 
-	// 🔍 🛠️ デバッグ用：ボタンを押した時に強制的に急変動データを注入する
-	private void injectDummyData(double diff) {
-		System.out.println("[テストモード] 仙台のダミー気圧データを注入します (差分: " + diff + " hPa)");
-
-		// 判定ロジックが「過去1時間前」を見るため、まずはダミーの「1時間前の過去ログ」を歴史に仕込む
+	private void runNotificationTest() {
 		LocalDateTime now = LocalDateTime.now();
-		WeatherRecord oldRecord = new WeatherRecord(now.minusHours(1), "Sendai,JP", 20.0, 60.0, lastSendaiPressure);
-		sendaiHistory.add(oldRecord);
+		WeatherRecord comparison = new WeatherRecord(now.minusHours(1), "Sendai,JP", 20.0, 60.0, 1000.0);
+		WeatherRecord current = new WeatherRecord(now, "Sendai,JP", 20.0, 60.0, 1003.0);
+		alertNotifier.notifyAlert(new PressureAlert(current, comparison, 3.0));
+	}
 
-		// そして、今現在の「激変したデータ」を突っ込む
-		double newPressure = lastSendaiPressure + diff;
-		WeatherRecord currentDummy = new WeatherRecord(now, "Sendai,JP", 20.0, 60.0, newPressure);
-
-		processNewRecord(currentDummy);
+	private void shutdownApplication() {
+		collectionStatusLabel.setText("終了処理中...");
+		alertNotifier.close();
+		if (weatherDataService != null) {
+			try {
+				weatherDataService.close();
+			} catch (SQLException e) {
+				System.err.println("Could not close weather data service: " + e.getMessage());
+			}
+		}
+		dispose();
 	}
 
 	private void checkPressureFluctuation(WeatherRecord current) {
@@ -264,7 +286,6 @@ public class WeatherApp extends JFrame {
 				WeatherRecord record = new WeatherRecord(dt, city, temp, humid, press);
 				if (city.equals("Sendai,JP")) {
 					sendaiHistory.add(record);
-					lastSendaiPressure = press;
 				}
 				if (tempSeriesMap.containsKey(city)) {
 					Date date = Date.from(dt.atZone(ZoneId.systemDefault()).toInstant());

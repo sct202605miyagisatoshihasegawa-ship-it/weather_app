@@ -36,7 +36,9 @@ public final class ScheduledAlertNotifier implements AlertNotifier {
 
     @Override
     public synchronized void notifyAlert(PressureAlert alert) {
-        stopScheduledPlayback();
+        if (active) {
+            return;
+        }
         messageConsumer.accept(messageFor(alert));
         active = true;
         repeatFuture = scheduler.scheduleAtFixedRate(soundPlayer, 0, repeatInterval.toMillis(), TimeUnit.MILLISECONDS);

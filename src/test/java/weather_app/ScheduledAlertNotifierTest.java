@@ -1,6 +1,7 @@
 package weather_app;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -28,6 +29,9 @@ class ScheduledAlertNotifierTest {
             assertTrue(soundPlayed.await(1, TimeUnit.SECONDS));
             assertTrue(notifier.isActive());
             assertTrue(messages.getFirst().contains("急上昇"));
+
+            notifier.notifyAlert(new PressureAlert(current, comparison, 3.0));
+            assertEquals(1, messages.size());
 
             notifier.stop();
 

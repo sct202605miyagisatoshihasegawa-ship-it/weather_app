@@ -25,10 +25,11 @@ class WeatherDataServiceTest {
         };
         List<WeatherRecord> published = new ArrayList<>();
         List<String> failedCities = new ArrayList<>();
+        List<WeatherCollectionStatus> statuses = new ArrayList<>();
 
         try (WeatherRepository repository = new WeatherRepository(temporaryDirectory.resolve("weather-test.db"));
                 WeatherDataService service = new WeatherDataService(List.of("Sendai,JP", "Tokyo,JP"), dummyApi, repository,
-                        published::add, (city, error) -> failedCities.add(city))) {
+                        published::add, (city, error) -> failedCities.add(city), statuses::add)) {
             service.collectNow();
 
             assertEquals(1, published.size());
@@ -38,6 +39,9 @@ class WeatherDataServiceTest {
                     LocalDateTime.of(2026, 7, 21, 0, 0), "Sendai,JP");
             assertEquals(1, persisted.size());
             assertEquals(1005.0, persisted.get(0).pressure());
+            assertEquals(WeatherCollectionStatus.State.FETCHING, statuses.getFirst().state());
+            assertEquals(WeatherCollectionStatus.State.FAILURE, statuses.getLast().state());
+            assertEquals(1, statuses.getLast().consecutiveFailures());
         }
     }
 
@@ -46,7 +50,7 @@ class WeatherDataServiceTest {
         WeatherApiClient dummyApi = city -> { throw new WeatherApiException("not used"); };
         try (WeatherRepository repository = new WeatherRepository(temporaryDirectory.resolve("weather-test.db"));
                 WeatherDataService service = new WeatherDataService(List.of("Sendai,JP"), dummyApi, repository,
-                        record -> { }, (city, error) -> { })) {
+                        record -> { }, (city, error) -> { }, status -> { })) {
             org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                     () -> service.start(java.time.Duration.ZERO));
         }
