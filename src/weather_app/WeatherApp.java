@@ -344,13 +344,13 @@ public class WeatherApp extends JFrame {
 	}
 
 	private void replaceGraphRecords(List<WeatherRecord> records) {
-		sendaiHistory.clear();
-		for (TimeSeries series : tempSeriesMap.values()) series.clear();
-		for (TimeSeries series : humidSeriesMap.values()) series.clear();
-		for (TimeSeries series : pressSeriesMap.values()) series.clear();
-		for (WeatherRecord record : records) {
-			addRecordToGraphs(record);
-		}
+		updateGraphsInBatch(() -> {
+			sendaiHistory.clear();
+			for (TimeSeries series : tempSeriesMap.values()) series.clear();
+			for (TimeSeries series : humidSeriesMap.values()) series.clear();
+			for (TimeSeries series : pressSeriesMap.values()) series.clear();
+			for (WeatherRecord record : records) addRecordToGraphs(record);
+		});
 	}
 
 	private void chooseAndImportCsv() {
@@ -376,7 +376,9 @@ public class WeatherApp extends JFrame {
 			protected void done() {
 				try {
 					CsvImportResult result = get();
-					for (WeatherRecord record : result.importedRecords()) addRecordToGraphs(record);
+					updateGraphsInBatch(() -> {
+						for (WeatherRecord record : result.importedRecords()) addRecordToGraphs(record);
+					});
 					JOptionPane.showMessageDialog(WeatherApp.this,
 							"CSV移行が完了しました\n追加: " + result.importedCount() + "件\n重複スキップ: " + result.skippedDuplicateCount() + "件\n不正行: 0件",
 							"CSV移行", JOptionPane.INFORMATION_MESSAGE);
@@ -403,6 +405,20 @@ public class WeatherApp extends JFrame {
 		tempSeriesMap.get(record.city()).addOrUpdate(minute, record.temperature());
 		humidSeriesMap.get(record.city()).addOrUpdate(minute, record.humidity());
 		pressSeriesMap.get(record.city()).addOrUpdate(minute, record.pressure());
+	}
+
+	/** Prevents a repaint for every historical observation; one repaint follows the whole batch. */
+	private void updateGraphsInBatch(Runnable update) {
+		tempDataset.setNotify(false);
+		humidDataset.setNotify(false);
+		pressDataset.setNotify(false);
+		try {
+			update.run();
+		} finally {
+			tempDataset.setNotify(true);
+			humidDataset.setNotify(true);
+			pressDataset.setNotify(true);
+		}
 	}
 
 	public static void main(String[] args) {
