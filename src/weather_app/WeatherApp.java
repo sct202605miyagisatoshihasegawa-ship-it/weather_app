@@ -53,6 +53,7 @@ public class WeatherApp extends JFrame {
 			+ "weather_data.csv";
 
 	private final WeatherApiClient weatherApiClient;
+	private final PressureAlertService pressureAlertService = new PressureAlertService();
 
 	private TimeSeriesCollection tempDataset = new TimeSeriesCollection();
 	private TimeSeriesCollection humidDataset = new TimeSeriesCollection();
@@ -208,10 +209,9 @@ public class WeatherApp extends JFrame {
 		saveToCsv(record);
 
 		if (record.city().equals("Sendai,JP")) {
+			checkPressureFluctuation(record);
 			lastSendaiPressure = record.pressure();
 			sendaiHistory.add(record);
-			// 🔍 過去1時間（15分間隔なら4個前、10秒間隔なら6個前）のデータと比較して音を鳴らす判定
-			checkPressureFluctuation(record);
 		}
 
 		Date date = Date.from(record.dateTime().atZone(ZoneId.systemDefault()).toInstant());
@@ -240,40 +240,17 @@ public class WeatherApp extends JFrame {
 		processNewRecord(currentDummy);
 	}
 
-	// 🔍 判定ロジック：案A（過去1時間前のデータと比較して3hPa以上の変動でアラート）
 	private void checkPressureFluctuation(WeatherRecord current) {
-		if (sendaiHistory.size() < 2)
-			return;
-
-		WeatherRecord targetOldRecord = null;
-		LocalDateTime oneHourAgo = current.dateTime().minusHours(1);
-
-		// 現在が10秒間隔テスト中の場合、1時間前が存在しないので「直近の最も古いデータ」を擬似的に1時間前とみなしてテストできるようにします
-		if (sendaiHistory.get(0).dateTime().isAfter(oneHourAgo)) {
-			targetOldRecord = sendaiHistory.get(0); // テスト用：手持ちで一番古いもの
-		} else {
-			// 本番用：1時間前に一番近いデータを歴史から探す
-			for (WeatherRecord history : sendaiHistory) {
-				if (!history.dateTime().isAfter(oneHourAgo)) {
-					targetOldRecord = history;
-				}
+		pressureAlertService.evaluate(current, sendaiHistory).ifPresent(alert -> {
+			double difference = alert.pressureDifference();
+			if (alert.isRising()) {
+				System.out.println("⚠️ 仙台の気圧が急上昇！(" + String.format("%.1f", difference) + " hPa) 音を1回鳴らします。");
+				updateAlertUI("⚠️ 仙台の気圧急上昇！(" + String.format("%.1f", difference) + " hPa)", 1);
+			} else {
+				System.out.println("⚠️ 仙台の気圧が急降下！(" + String.format("%.1f", difference) + " hPa) 音を3回鳴らします。");
+				updateAlertUI("⚠️ 仙台の気圧急降下！(" + String.format("%.1f", difference) + " hPa)", 3);
 			}
-		}
-		if (targetOldRecord != null && targetOldRecord != current) {
-			double diff = current.pressure() - targetOldRecord.pressure();
-
-			if (Math.abs(diff) >= 3.0) {
-				if (diff > 0) {
-					// 気圧上昇：1回鳴らす
-					System.out.println("⚠️ 仙台の気圧が急上昇！(" + String.format("%.1f", diff) + " hPa) 音を1回鳴らします。");
-					updateAlertUI("⚠️ 仙台の気圧急上昇！(" + String.format("%.1f", diff) + " hPa)", 1);
-				} else {
-					// 気圧降下：3回鳴らす
-					System.out.println("⚠️ 仙台の気圧が急降下！(" + String.format("%.1f", diff) + " hPa) 音を3回鳴らします。");
-					updateAlertUI("⚠️ 仙台の気圧急降下！(" + String.format("%.1f", diff) + " hPa)", 3);
-				}
-			}
-		}
+		});
 	}
 
 	// 🔍 UIの警告文字を書き換え、音を別スレッドで鳴らす（画面フリーズ対策）
