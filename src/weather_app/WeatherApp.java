@@ -6,12 +6,11 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Toolkit;
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.io.PrintWriter;
+import java.sql.SQLException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -19,9 +18,6 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -54,6 +50,7 @@ public class WeatherApp extends JFrame {
 
 	private final WeatherApiClient weatherApiClient;
 	private final PressureAlertService pressureAlertService = new PressureAlertService();
+	private WeatherDataService weatherDataService;
 
 	private TimeSeriesCollection tempDataset = new TimeSeriesCollection();
 	private TimeSeriesCollection humidDataset = new TimeSeriesCollection();
@@ -192,22 +189,22 @@ public class WeatherApp extends JFrame {
 	}
 
 	private void startDataCollectionTimer() {
-		ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-		scheduler.scheduleAtFixedRate(() -> {
-			System.out.println("[" + LocalDateTime.now() + "] OpenWeatherMapからデータ取得中...");
-			for (String city : CITIES) {
-				WeatherRecord record = fetchWeatherDataFromApi(city);
-				if (record != null) {
-					processNewRecord(record);
-				}
-			}
-		}, 0, /*10, TimeUnit.SECONDS); */15, TimeUnit.MINUTES);
+		try {
+			WeatherRepository repository = new WeatherRepository(WeatherAppPaths.databaseFile());
+			weatherDataService = new WeatherDataService(List.of(CITIES), weatherApiClient, repository,
+					this::processNewRecord, this::handleCollectionFailure);
+			weatherDataService.start(Duration.ofMinutes(15));
+		} catch (IOException | SQLException e) {
+			throw new IllegalStateException("Could not start weather data collection", e);
+		}
+	}
+
+	private void handleCollectionFailure(String city, Exception error) {
+		System.err.println("Weather collection failed (" + city + "): " + error.getMessage());
 	}
 
 	// 🔍 新しいデータを処理・反映する共通メソッド（API経由・ダミー共通）
 	private void processNewRecord(WeatherRecord record) {
-		saveToCsv(record);
-
 		if (record.city().equals("Sendai,JP")) {
 			checkPressureFluctuation(record);
 			lastSendaiPressure = record.pressure();
@@ -269,24 +266,6 @@ public class WeatherApp extends JFrame {
 			}
 		}).start();
 }
-	private WeatherRecord fetchWeatherDataFromApi(String city) {
-		try {
-			return weatherApiClient.fetch(city);
-		} catch (WeatherApiException e) {
-			System.err.println("Weather API error (" + city + "): " + e.getMessage());
-			return null;
-		}
-	}
-
-	private synchronized void saveToCsv(WeatherRecord record) {
-		try (FileWriter fw = new FileWriter(CSV_FILE, true);
-				PrintWriter out = new PrintWriter(new BufferedWriter(fw))) {
-			out.println(record.toCsvRow());
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-	}
-
 	private void loadCsvToGraph() {
 		File file = new File(CSV_FILE);
 		if (!file.exists())
