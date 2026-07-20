@@ -206,20 +206,20 @@ public class WeatherApp extends JFrame {
 	private void processNewRecord(WeatherRecord record) {
 		saveToCsv(record);
 
-		if (record.city.equals("Sendai,JP")) {
-			lastSendaiPressure = record.pressure;
+		if (record.city().equals("Sendai,JP")) {
+			lastSendaiPressure = record.pressure();
 			sendaiHistory.add(record);
 			// 🔍 過去1時間（15分間隔なら4個前、10秒間隔なら6個前）のデータと比較して音を鳴らす判定
 			checkPressureFluctuation(record);
 		}
 
-		Date date = Date.from(record.dateTime.atZone(ZoneId.systemDefault()).toInstant());
+		Date date = Date.from(record.dateTime().atZone(ZoneId.systemDefault()).toInstant());
 		Minute minute = new Minute(date);
 
 		SwingUtilities.invokeLater(() -> {
-			tempSeriesMap.get(record.city).addOrUpdate(minute, record.temperature);
-			humidSeriesMap.get(record.city).addOrUpdate(minute, record.humidity);
-			pressSeriesMap.get(record.city).addOrUpdate(minute, record.pressure);
+			tempSeriesMap.get(record.city()).addOrUpdate(minute, record.temperature());
+			humidSeriesMap.get(record.city()).addOrUpdate(minute, record.humidity());
+			pressSeriesMap.get(record.city()).addOrUpdate(minute, record.pressure());
 		});
 	}
 
@@ -245,21 +245,21 @@ public class WeatherApp extends JFrame {
 			return;
 
 		WeatherRecord targetOldRecord = null;
-		LocalDateTime oneHourAgo = current.dateTime.minusHours(1);
+		LocalDateTime oneHourAgo = current.dateTime().minusHours(1);
 
 		// 現在が10秒間隔テスト中の場合、1時間前が存在しないので「直近の最も古いデータ」を擬似的に1時間前とみなしてテストできるようにします
-		if (sendaiHistory.get(0).dateTime.isAfter(oneHourAgo)) {
+		if (sendaiHistory.get(0).dateTime().isAfter(oneHourAgo)) {
 			targetOldRecord = sendaiHistory.get(0); // テスト用：手持ちで一番古いもの
 		} else {
 			// 本番用：1時間前に一番近いデータを歴史から探す
 			for (WeatherRecord history : sendaiHistory) {
-				if (!history.dateTime.isAfter(oneHourAgo)) {
+				if (!history.dateTime().isAfter(oneHourAgo)) {
 					targetOldRecord = history;
 				}
 			}
 		}
 		if (targetOldRecord != null && targetOldRecord != current) {
-			double diff = current.pressure - targetOldRecord.pressure;
+			double diff = current.pressure() - targetOldRecord.pressure();
 
 			if (Math.abs(diff) >= 3.0) {
 				if (diff > 0) {
@@ -384,6 +384,4 @@ public class WeatherApp extends JFrame {
 		SwingUtilities.invokeLater(() -> new WeatherApp().setVisible(true));
 	}
 }
-
-
 
