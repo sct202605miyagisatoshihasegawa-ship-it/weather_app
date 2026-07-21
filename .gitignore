@@ -9,3 +9,4 @@ settings.properties
 *.db-wal
 *.db-shm
 backups/
+/target/
