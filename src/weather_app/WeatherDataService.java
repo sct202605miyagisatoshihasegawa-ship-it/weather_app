@@ -19,7 +19,11 @@ public final class WeatherDataService implements AutoCloseable {
     private final Consumer<WeatherRecord> recordConsumer;
     private final BiConsumer<String, Exception> failureConsumer;
     private final Consumer<WeatherCollectionStatus> statusConsumer;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread collectorThread = new Thread(runnable, "weather-data-collector");
+        collectorThread.setDaemon(true);
+        return collectorThread;
+    });
     private int consecutiveFailures;
 
     public WeatherDataService(List<String> cities, WeatherApiClient apiClient, WeatherRepository repository,
@@ -75,6 +79,13 @@ public final class WeatherDataService implements AutoCloseable {
     @Override
     public void close() throws SQLException {
         scheduler.shutdownNow();
+        try {
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                System.err.println("Weather collection did not stop within five seconds");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         repository.close();
     }
 }

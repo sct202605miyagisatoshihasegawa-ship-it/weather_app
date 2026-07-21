@@ -22,6 +22,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -74,7 +75,8 @@ public class WeatherApp extends JFrame {
 	private Map<String, TimeSeries> pressSeriesMap = new HashMap<>();
 
 	// 🔍 仙台の過去データを判定用に記録しておくリスト
-	private List<WeatherRecord> sendaiHistory = new ArrayList<>();
+	private final List<WeatherRecord> sendaiHistory = new ArrayList<>();
+	private final Object sendaiHistoryLock = new Object();
 
 	// 🔍 右上の警告表示用ラベル
 	private JLabel alertLabel;
@@ -345,8 +347,12 @@ public class WeatherApp extends JFrame {
 	// 🔍 新しいデータを処理・反映する共通メソッド（API経由・ダミー共通）
 	private void processNewRecord(WeatherRecord record) {
 		if (record.city().equals("Sendai,JP")) {
-			checkPressureFluctuation(record);
-			sendaiHistory.add(record);
+			Optional<PressureAlert> alert;
+			synchronized (sendaiHistoryLock) {
+				alert = pressureAlertService.evaluate(record, sendaiHistory);
+				sendaiHistory.add(record);
+			}
+			alert.ifPresent(alertNotifier::notifyAlert);
 		}
 
 		Date date = Date.from(record.dateTime().atZone(ZoneId.systemDefault()).toInstant());
@@ -378,10 +384,6 @@ public class WeatherApp extends JFrame {
 			}
 		}
 		dispose();
-	}
-
-	private void checkPressureFluctuation(WeatherRecord current) {
-		pressureAlertService.evaluate(current, sendaiHistory).ifPresent(alertNotifier::notifyAlert);
 	}
 
 	private void loadDatabaseToGraphAndStartCollection() {
@@ -435,7 +437,12 @@ public class WeatherApp extends JFrame {
 
 	private void replaceGraphRecords(List<WeatherRecord> records) {
 		updateGraphsInBatch(() -> {
-			sendaiHistory.clear();
+			synchronized (sendaiHistoryLock) {
+				sendaiHistory.clear();
+				for (WeatherRecord record : records) {
+					if (record.city().equals("Sendai,JP")) sendaiHistory.add(record);
+				}
+			}
 			for (TimeSeries series : tempSeriesMap.values()) series.clear();
 			for (TimeSeries series : humidSeriesMap.values()) series.clear();
 			for (TimeSeries series : pressSeriesMap.values()) series.clear();
@@ -486,7 +493,6 @@ public class WeatherApp extends JFrame {
 	}
 
 	private void addRecordToGraphs(WeatherRecord record) {
-		if (record.city().equals("Sendai,JP")) sendaiHistory.add(record);
 		if (!tempSeriesMap.containsKey(record.city())) return;
 		Date date = Date.from(record.dateTime().atZone(ZoneId.systemDefault()).toInstant());
 		Minute minute = new Minute(date);
