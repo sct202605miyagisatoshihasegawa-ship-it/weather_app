@@ -2,6 +2,7 @@ package weather_app;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
@@ -36,6 +37,8 @@ import javax.swing.JPanel;
 import javax.swing.JPasswordField;
 import javax.swing.JSpinner;
 import javax.swing.JTabbedPane;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
@@ -81,6 +84,7 @@ public class WeatherApp extends JFrame {
 	// 🔍 右上の警告表示用ラベル
 	private JLabel alertLabel;
 	private JLabel collectionStatusLabel;
+	private JTextArea collectionLog;
 
 	public WeatherApp() {
 		try {
@@ -143,9 +147,15 @@ public class WeatherApp extends JFrame {
 				text -> SwingUtilities.invokeLater(() -> alertLabel.setText(text + "   ")),
 				() -> Toolkit.getDefaultToolkit().beep());
 		JButton settingsButton = new JButton("設定");
+		settingsButton.setPreferredSize(new Dimension(250, 30));
+		settingsButton.setMinimumSize(new Dimension(250, 30));
+		settingsButton.setMaximumSize(new Dimension(250, 30));
 		settingsButton.addActionListener(e -> showSettingsDialog());
 		headerPanel.add(settingsButton, BorderLayout.CENTER);
 		headerPanel.add(alertLabel, BorderLayout.EAST);
+		headerPanel.remove(collectionStatusLabel);
+		headerPanel.remove(settingsButton);
+		headerPanel.add(settingsButton, BorderLayout.WEST);
 		JPanel northPanel = new JPanel(new BorderLayout());
 		northPanel.add(headerPanel, BorderLayout.NORTH);
 		northPanel.add(createGraphPeriodPanel(), BorderLayout.SOUTH);
@@ -155,6 +165,11 @@ public class WeatherApp extends JFrame {
 		tabbedPane.addTab("気温", new ChartPanel(tempChart));
 		tabbedPane.addTab("湿度", new ChartPanel(humidChart));
 		tabbedPane.addTab("気圧", new ChartPanel(pressChart));
+		collectionLog = new JTextArea();
+		collectionLog.setEditable(false);
+		collectionLog.setFont(new Font("MS Gothic", Font.PLAIN, 12));
+		tabbedPane.addTab("取得ログ", new JScrollPane(collectionLog));
+		appendCollectionLog("待機中");
 		add(tabbedPane, BorderLayout.CENTER);
 
 		// 4. 下部の都市切り替えチェックボックスと通知操作
@@ -326,6 +341,7 @@ public class WeatherApp extends JFrame {
 		settings = updatedSettings;
 		weatherApiClient = new OpenWeatherMapClient(settings.apiKey());
 		startDataCollectionTimer(false);
+		appendCollectionLog("設定を保存しました。次回取得を待機中");
 		collectionStatusLabel.setText("設定を保存しました。次回取得を待機中");
 	}
 
@@ -336,6 +352,7 @@ public class WeatherApp extends JFrame {
 	private void updateCollectionStatus(WeatherCollectionStatus status) {
 		SwingUtilities.invokeLater(() -> {
 			String timestamp = status.timestamp().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+			appendCollectionLog(timestamp + " " + status.detail());
 			switch (status.state()) {
 			case FETCHING -> collectionStatusLabel.setText("取得中...");
 			case SUCCESS -> collectionStatusLabel.setText("最終成功: " + timestamp);
@@ -374,6 +391,7 @@ public class WeatherApp extends JFrame {
 	}
 
 	private void shutdownApplication() {
+		appendCollectionLog("終了処理中...");
 		collectionStatusLabel.setText("終了処理中...");
 		alertNotifier.close();
 		if (weatherDataService != null) {
@@ -513,6 +531,12 @@ public class WeatherApp extends JFrame {
 			humidDataset.setNotify(true);
 			pressDataset.setNotify(true);
 		}
+	}
+
+	private void appendCollectionLog(String message) {
+		if (collectionLog == null) return;
+		collectionLog.append(message + System.lineSeparator());
+		collectionLog.setCaretPosition(collectionLog.getDocument().getLength());
 	}
 
 	public static void main(String[] args) {
